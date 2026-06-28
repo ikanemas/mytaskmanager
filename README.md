@@ -1,17 +1,16 @@
-# mytaskmanager
+# My Task Manager
 
-A new Flutter project.
+Lab Test-DES3113
 
-## Getting Started
+A Flutter task manager app using Firebase Authentication and Cloud Firestore.
 
-This project is a starting point for a Flutter application.
+## Features
 
-A few resources to get you started if this is your first Flutter project:
-
-- [Learn Flutter](https://docs.flutter.dev/get-started/learn-flutter)
-- [Write your first Flutter app](https://docs.flutter.dev/get-started/codelab)
-- [Flutter learning resources](https://docs.flutter.dev/reference/learning-resources)
-
-For help getting started with Flutter development, view the
-[online documentation](https://docs.flutter.dev/), which offers tutorials,
-samples, guidance on mobile development, and a full API reference.
+- Email/password registration and login
+- User-specific task storage in Cloud Firestore
+- Add, edit, and delete tasks
+- Task status tracking
+- Completion dates
+- Dashboard summary
+- Calendar date filtering
+- All Tasks page
