@@ -53,6 +53,7 @@ class TaskItem {
     required this.status,
     required this.createdAt,
     required this.dueDate,
+    required this.deletedAt,
   });
 
   final String id;
@@ -62,6 +63,9 @@ class TaskItem {
   final TaskStatus status;
   final DateTime? createdAt;
   final DateTime? dueDate;
+  final DateTime? deletedAt;
+
+  bool get isDeleted => deletedAt != null;
 
   factory TaskItem.fromDocument(
     QueryDocumentSnapshot<Map<String, dynamic>> doc,
@@ -69,6 +73,7 @@ class TaskItem {
     final data = doc.data();
     final createdAt = data['createdAt'];
     final dueDate = data['dueDate'];
+    final deletedAt = data['deletedAt'];
 
     return TaskItem(
       id: doc.id,
@@ -78,6 +83,7 @@ class TaskItem {
       status: TaskStatus.fromValue(data['status']),
       createdAt: createdAt is Timestamp ? createdAt.toDate() : null,
       dueDate: dueDate is Timestamp ? dueDate.toDate() : null,
+      deletedAt: deletedAt is Timestamp ? deletedAt.toDate() : null,
     );
   }
 }
@@ -610,9 +616,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   Future<void> _deleteTask(String taskId) async {
     try {
-      await _tasks.doc(taskId).delete();
+      await _tasks.doc(taskId).update({
+        'deletedAt': FieldValue.serverTimestamp(),
+      });
       if (mounted) {
-        _showSnackBar(context, 'Task deleted');
+        _showSnackBar(context, 'Task moved to deleted tasks');
       }
     } on FirebaseException catch (error) {
       if (mounted) {
@@ -638,6 +646,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
         title: const Text('My Tasks'),
         actions: [
           IconButton(
+            tooltip: 'Deleted tasks',
+            icon: const Icon(Icons.delete_sweep_outlined),
+            onPressed: _openDeletedTasksScreen,
+          ),
+          IconButton(
             tooltip: 'Logout',
             icon: const Icon(Icons.logout),
             onPressed: _logout,
@@ -661,7 +674,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
           }
 
           final tasks =
-              (snapshot.data?.docs ?? []).map(TaskItem.fromDocument).toList()
+              (snapshot.data?.docs ?? [])
+                  .map(TaskItem.fromDocument)
+                  .where((task) => !task.isDeleted)
+                  .toList()
                 ..sort(_sortByDueDate);
           final filteredTasks = _filteredTasks(tasks);
           final tasksByDate = _tasksByDate(tasks);
@@ -757,7 +773,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                             builder: (dialogContext) => AlertDialog(
                               title: const Text('Delete task?'),
                               content: const Text(
-                                'This task will be removed permanently.',
+                                'This task will move to Deleted Tasks.',
                               ),
                               actions: [
                                 TextButton(
@@ -812,6 +828,14 @@ class _DashboardScreenState extends State<DashboardScreen> {
   void _openAllTasksScreen() {
     Navigator.of(context).push(
       MaterialPageRoute<void>(builder: (_) => MyTasksScreen(tasks: _tasks)),
+    );
+  }
+
+  void _openDeletedTasksScreen() {
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => DeletedTasksScreen(tasks: _tasks),
+      ),
     );
   }
 
@@ -936,9 +960,11 @@ class MyTasksScreen extends StatefulWidget {
 class _MyTasksScreenState extends State<MyTasksScreen> {
   Future<void> _deleteTask(String taskId) async {
     try {
-      await widget.tasks.doc(taskId).delete();
+      await widget.tasks.doc(taskId).update({
+        'deletedAt': FieldValue.serverTimestamp(),
+      });
       if (mounted) {
-        _showSnackBar(context, 'Task deleted');
+        _showSnackBar(context, 'Task moved to deleted tasks');
       }
     } on FirebaseException catch (error) {
       if (mounted) {
@@ -983,7 +1009,10 @@ class _MyTasksScreenState extends State<MyTasksScreen> {
           }
 
           final tasks =
-              (snapshot.data?.docs ?? []).map(TaskItem.fromDocument).toList()
+              (snapshot.data?.docs ?? [])
+                  .map(TaskItem.fromDocument)
+                  .where((task) => !task.isDeleted)
+                  .toList()
                 ..sort(_sortByDueDate);
 
           return CustomScrollView(
@@ -1054,7 +1083,7 @@ class _MyTasksScreenState extends State<MyTasksScreen> {
                             builder: (dialogContext) => AlertDialog(
                               title: const Text('Delete task?'),
                               content: const Text(
-                                'This task will be removed permanently.',
+                                'This task will move to Deleted Tasks.',
                               ),
                               actions: [
                                 TextButton(
@@ -1083,6 +1112,121 @@ class _MyTasksScreenState extends State<MyTasksScreen> {
                   ),
                 ),
             ],
+          );
+        },
+      ),
+    );
+  }
+}
+
+class DeletedTasksScreen extends StatefulWidget {
+  const DeletedTasksScreen({super.key, required this.tasks});
+
+  final CollectionReference<Map<String, dynamic>> tasks;
+
+  @override
+  State<DeletedTasksScreen> createState() => _DeletedTasksScreenState();
+}
+
+class _DeletedTasksScreenState extends State<DeletedTasksScreen> {
+  Future<void> _restoreTask(TaskItem task) async {
+    try {
+      await task.reference.update({'deletedAt': FieldValue.delete()});
+      if (mounted) {
+        _showSnackBar(context, 'Task restored');
+      }
+    } on FirebaseException catch (error) {
+      if (mounted) {
+        _showSnackBar(context, error.message ?? 'Could not restore task');
+      }
+    }
+  }
+
+  Future<void> _deleteForever(TaskItem task) async {
+    final shouldDelete = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Delete forever?'),
+        content: const Text('This task will be permanently removed.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton.icon(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            icon: const Icon(Icons.delete_forever_outlined),
+            label: const Text('Delete Forever'),
+          ),
+        ],
+      ),
+    );
+
+    if (shouldDelete != true) {
+      return;
+    }
+
+    try {
+      await task.reference.delete();
+      if (mounted) {
+        _showSnackBar(context, 'Task permanently deleted');
+      }
+    } on FirebaseException catch (error) {
+      if (mounted) {
+        _showSnackBar(context, error.message ?? 'Could not delete task');
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('Deleted Tasks')),
+      body: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+        stream: widget.tasks.snapshots(),
+        builder: (context, snapshot) {
+          if (snapshot.hasError) {
+            return Center(
+              child: Padding(
+                padding: const EdgeInsets.all(24),
+                child: Text('Could not load deleted tasks: ${snapshot.error}'),
+              ),
+            );
+          }
+
+          if (snapshot.connectionState == ConnectionState.waiting) {
+            return const Center(child: CircularProgressIndicator());
+          }
+
+          final deletedTasks =
+              (snapshot.data?.docs ?? [])
+                  .map(TaskItem.fromDocument)
+                  .where((task) => task.isDeleted)
+                  .toList()
+                ..sort(_sortByDeletedDate);
+
+          if (deletedTasks.isEmpty) {
+            return const Center(
+              child: Padding(
+                padding: EdgeInsets.all(28),
+                child: Text('No deleted tasks.'),
+              ),
+            );
+          }
+
+          return ListView.separated(
+            padding: const EdgeInsets.all(16),
+            itemCount: deletedTasks.length,
+            separatorBuilder: (_, _) => const SizedBox(height: 12),
+            itemBuilder: (context, index) {
+              final task = deletedTasks[index];
+
+              return DeletedTaskTile(
+                task: task,
+                onRestore: () => _restoreTask(task),
+                onDeleteForever: () => _deleteForever(task),
+              );
+            },
           );
         },
       ),
@@ -1422,6 +1566,103 @@ class TaskTile extends StatelessWidget {
   }
 }
 
+class DeletedTaskTile extends StatelessWidget {
+  const DeletedTaskTile({
+    super.key,
+    required this.task,
+    required this.onRestore,
+    required this.onDeleteForever,
+  });
+
+  final TaskItem task;
+  final VoidCallback onRestore;
+  final VoidCallback onDeleteForever;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Colors.white,
+      borderRadius: BorderRadius.circular(8),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Container(
+                  width: 44,
+                  height: 44,
+                  decoration: BoxDecoration(
+                    color: Colors.black54,
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: const Icon(Icons.delete_outline, color: Colors.white),
+                ),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        task.title,
+                        style: Theme.of(context).textTheme.titleMedium
+                            ?.copyWith(fontWeight: FontWeight.w800),
+                      ),
+                      if (task.description.isNotEmpty) ...[
+                        const SizedBox(height: 6),
+                        Text(task.description),
+                      ],
+                      const SizedBox(height: 10),
+                      Wrap(
+                        spacing: 8,
+                        runSpacing: 8,
+                        children: [
+                          StatusPill(status: task.status),
+                          InfoPill(
+                            icon: Icons.event_available_outlined,
+                            label: task.dueDate == null
+                                ? 'No completion date'
+                                : 'Due ${_formatShortDate(task.dueDate!)}',
+                          ),
+                          InfoPill(
+                            icon: Icons.delete_outline,
+                            label: task.deletedAt == null
+                                ? 'Deleted'
+                                : 'Deleted ${_formatShortDate(task.deletedAt!)}',
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.end,
+              children: [
+                TextButton.icon(
+                  onPressed: onRestore,
+                  icon: const Icon(Icons.restore_outlined),
+                  label: const Text('Restore'),
+                ),
+                const SizedBox(width: 8),
+                TextButton.icon(
+                  onPressed: onDeleteForever,
+                  icon: const Icon(Icons.delete_forever_outlined),
+                  label: const Text('Delete Forever'),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 class AddTaskScreen extends StatelessWidget {
   const AddTaskScreen({super.key, required this.tasks});
 
@@ -1473,6 +1714,10 @@ class EditTaskScreen extends StatelessWidget {
     });
   }
 
+  Future<void> _deleteTask() {
+    return task.reference.update({'deletedAt': FieldValue.serverTimestamp()});
+  }
+
   @override
   Widget build(BuildContext context) {
     return TaskFormScreen(
@@ -1484,6 +1729,7 @@ class EditTaskScreen extends StatelessWidget {
       initialStatus: task.status,
       initialDueDate: task.dueDate ?? DateTime.now(),
       onSave: _updateTask,
+      onDelete: _deleteTask,
     );
   }
 }
@@ -1499,6 +1745,7 @@ class TaskFormScreen extends StatefulWidget {
     this.initialTitle = '',
     this.initialDescription = '',
     this.initialStatus = TaskStatus.notStarted,
+    this.onDelete,
   });
 
   final String title;
@@ -1515,6 +1762,7 @@ class TaskFormScreen extends StatefulWidget {
     DateTime dueDate,
   )
   onSave;
+  final Future<void> Function()? onDelete;
 
   @override
   State<TaskFormScreen> createState() => _TaskFormScreenState();
@@ -1584,6 +1832,48 @@ class _TaskFormScreenState extends State<TaskFormScreen> {
     } finally {
       if (mounted) {
         setState(() => _isSaving = false);
+      }
+    }
+  }
+
+  Future<void> _delete() async {
+    final onDelete = widget.onDelete;
+    if (onDelete == null) {
+      return;
+    }
+
+    final shouldDelete = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Delete task?'),
+        content: const Text('This task will move to Deleted Tasks.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton.icon(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            icon: const Icon(Icons.delete_outline),
+            label: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+
+    if (shouldDelete != true) {
+      return;
+    }
+
+    try {
+      await onDelete();
+      if (mounted) {
+        _showSnackBar(context, 'Task moved to deleted tasks');
+        Navigator.of(context).pop();
+      }
+    } on FirebaseException catch (error) {
+      if (mounted) {
+        _showSnackBar(context, error.message ?? 'Could not delete task');
       }
     }
   }
@@ -1663,6 +1953,17 @@ class _TaskFormScreenState extends State<TaskFormScreen> {
                       : Icon(widget.buttonIcon),
                   label: Text(widget.buttonLabel),
                 ),
+                if (widget.onDelete != null) ...[
+                  const SizedBox(height: 12),
+                  OutlinedButton.icon(
+                    onPressed: _isSaving ? null : _delete,
+                    icon: const Icon(Icons.delete_outline),
+                    label: const Text('Delete Task'),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: Theme.of(context).colorScheme.error,
+                    ),
+                  ),
+                ],
               ],
             ),
           ),
@@ -1770,6 +2071,15 @@ int _sortByDueDate(TaskItem first, TaskItem second) {
   final firstCreatedAt = first.createdAt ?? DateTime(9999);
   final secondCreatedAt = second.createdAt ?? DateTime(9999);
   return firstCreatedAt.compareTo(secondCreatedAt);
+}
+
+int _sortByDeletedDate(TaskItem first, TaskItem second) {
+  final firstDeletedAt =
+      first.deletedAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+  final secondDeletedAt =
+      second.deletedAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+
+  return secondDeletedAt.compareTo(firstDeletedAt);
 }
 
 Map<DateTime, List<TaskItem>> _tasksByDate(List<TaskItem> tasks) {
